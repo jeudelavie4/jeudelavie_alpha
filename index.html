@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jeu de la Vie — Conway</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --cell: #4ade80;
+    --cell-dead: #1e2230;
+    --border: #2a2f3e;
+    --text: #e5e9f0;
+    --muted: #8b93a7;
+    --accent: #4ade80;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    align-items: center;
+    background: var(--panel);
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 12px;
+    width: 100%;
+    max-width: 720px;
+  }
+
+  button {
+    background: #262b3a;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  button:hover { background: #333a4f; border-color: #3d455c; }
+  button:active { transform: translateY(1px); }
+
+  button.primary {
+    background: var(--accent);
+    color: #0f1117;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.primary:hover { background: #6ee79a; }
+
+  .info {
+    display: flex;
+    gap: 20px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 10px;
+  }
+
+  .info b { color: var(--text); }
+
+  .speed-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  input[type="range"] {
+    accent-color: var(--accent);
+    width: 120px;
+  }
+
+  canvas {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: crosshair;
+    image-rendering: pixelated;
+    touch-action: none;
+  }
+
+  .patterns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 12px;
+  }
+
+  .patterns button { font-size: 0.78rem; padding: 6px 10px; }
+
+  .hint {
+    color: var(--muted);
+    font-size: 0.75rem;
+    margin-top: 12px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>⚡ Jeu de la Vie</h1>
+<p class="subtitle">Automate cellulaire de John Conway (1970)</p>
+
+<div class="info">
+  <span>Génération : <b id="generation">0</b></span>
+  <span>Cellules vivantes : <b id="population">0</b></span>
+</div>
+
+<div class="controls">
+  <button class="primary" id="playBtn">▶ Lancer</button>
+  <button id="stepBtn">⏭ Pas</button>
+  <button id="randomBtn">🎲 Aléatoire</button>
+  <button id="clearBtn">🗑 Vider</button>
+  <div class="speed-control">
+    <label for="speed">Vitesse :</label>
+    <input type="range" id="speed" min="1" max="30" value="10">
+  </div>
+  <div class="speed-control">
+    <label for="cellSize">Zoom :</label>
+    <input type="range" id="cellSize" min="4" max="20" value="10">
+  </div>
+</div>
+
+<canvas id="grid"></canvas>
+
+<div class="patterns">
+  <button data-pattern="glider">Glider</button>
+  <button data-pattern="lwss">Vaisseau léger</button>
+  <button data-pattern="pulsar">Pulsar</button>
+  <button data-pattern="gosper">Canon de Gosper</button>
+  <button data-pattern="rpentomino">R-pentomino</button>
+  <button data-pattern="acorn">Gland</button>
+</div>
+
+<p class="hint">Clique ou glisse sur la grille pour dessiner des cellules. Les motifs sont placés au centre.</p>
+
+<script>
+const canvas = document.getElementById('grid');
+const ctx = canvas.getContext('2d');
+const generationEl = document.getElementById('generation');
+const populationEl = document.getElementById('population');
+const playBtn = document.getElementById('playBtn');
+const speedInput = document.getElementById('speed');
+const cellSizeInput = document.getElementById('cellSize');
+
+const MAX_COLS = 140;
+const MAX_ROWS = 90;
+
+let cellSize = 10;
+let cols = 70;
+let rows = 50;
+let grid = [];
+let running = false;
+let generation = 0;
+let timerId = null;
+let drawing = false;
+let drawValue = 1;
+
+function makeGrid() {
+  return Array.from({ length: rows }, () => new Uint8Array(cols));
+}
+
+function resizeCanvas() {
+  cellSize = parseInt(cellSizeInput.value, 10);
+  cols = Math.min(MAX_COLS, Math.floor(window.innerWidth / cellSize) - 2);
+  rows = Math.min(MAX_ROWS, Math.floor((window.innerHeight * 0.6) / cellSize));
+  const old = grid;
+  grid = makeGrid();
+  if (old) {
+    for (let r = 0; r < Math.min(rows, old.length); r++) {
+      for (let c = 0; c < Math.min(cols, old[r].length); c++) {
+        grid[r][c] = old[r][c];
+      }
+    }
+  }
+  canvas.width = cols * cellSize;
+  canvas.height = rows * cellSize;
+  draw();
+}
+
+function draw() {
+  ctx.fillStyle = '#12151f';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = c * cellSize;
+      const y = r * cellSize;
+      if (grid[r][c]) {
+        ctx.fillStyle = ageHeat(grid[r][c]);
+        ctx.fillRect(x, y, cellSize - 1, cellSize - 1);
+      } else {
+        ctx.fillStyle = '#1e2230';
+        ctx.fillRect(x, y, cellSize - 1, cellSize - 1);
+      }
+    }
+  }
+}
+
+function ageHeat(cell) {
+  const age = Math.min(cell >> 1, 6);
+  const shades = ['#bbf7d0', '#86efac', '#4ade80', '#34d399', '#10b981', '#059669', '#047857'];
+  return shades[age];
+}
+
+function countNeighbors(r, c) {
+  let n = 0;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = r + dr;
+      const ncol = c + dc;
+      if (nr >= 0 && nr < rows && ncol >= 0 && ncol < cols && (grid[nr][ncol] & 1)) n++;
+    }
+  }
+  return n;
+}
+
+function step() {
+  const next = makeGrid();
+  let pop = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = grid[r][c];
+      const alive = cell & 1;
+      const neighbors = countNeighbors(r, c);
+      const v = (alive && (neighbors === 2 || neighbors === 3)) || (!alive && neighbors === 3) ? 1 : 0;
+      const age = v ? Math.min((cell >> 1) + 1, 6) : 0;
+      next[r][c] = v ? (age << 1) | 1 : 0;
+      if (v) pop++;
+    }
+  }
+  grid = next;
+  generation++;
+  generationEl.textContent = generation;
+  populationEl.textContent = pop;
+  draw();
+}
+
+function countPopulation() {
+  let pop = 0;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (grid[r][c] & 1) pop++;
+  return pop;
+}
+
+function updatePopulation() {
+  populationEl.textContent = countPopulation();
+}
+
+function start() {
+  if (running) return;
+  running = true;
+  playBtn.textContent = '⏸ Pause';
+  const delay = 1000 / parseInt(speedInput.value, 10);
+  timerId = setInterval(step, delay);
+}
+
+function stop() {
+  running = false;
+  playBtn.textContent = '▶ Lancer';
+  if (timerId) clearInterval(timerId);
+  timerId = null;
+}
+
+function randomize() {
+  stop();
+  grid = grid.map(row => row.map(() => Math.random() < 0.25 ? 1 : 0));
+  generation = 0;
+  generationEl.textContent = 0;
+  updatePopulation();
+  draw();
+}
+
+function clearGrid() {
+  stop();
+  grid = makeGrid();
+  generation = 0;
+  generationEl.textContent = 0;
+  populationEl.textContent = 0;
+  draw();
+}
+
+function cellFromEvent(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const c = Math.floor(x / cellSize);
+  const r = Math.floor(y / cellSize);
+  if (r >= 0 && r < rows && c >= 0 && c < cols) return { r, c };
+  return null;
+}
+
+function paint(e) {
+  const cell = cellFromEvent(e);
+  if (!cell) return;
+  const alive = grid[cell.r][cell.c] & 1;
+  if (alive !== drawValue) {
+    grid[cell.r][cell.c] = drawValue ? 1 : 0;
+    updatePopulation();
+    draw();
+  }
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  const cell = cellFromEvent(e);
+  if (!cell) return;
+  drawValue = (grid[cell.r][cell.c] & 1) ? 0 : 1;
+  drawing = true;
+  paint(e);
+});
+
+canvas.addEventListener('mousemove', (e) => { if (drawing) paint(e); });
+window.addEventListener('mouseup', () => { drawing = false; });
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const cell = cellFromEvent(e.touches[0]);
+  if (!cell) return;
+  drawValue = (grid[cell.r][cell.c] & 1) ? 0 : 1;
+  drawing = true;
+  paint(e.touches[0]);
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (drawing) paint(e.touches[0]);
+}, { passive: false });
+
+window.addEventListener('touchend', () => { drawing = false; });
+
+playBtn.addEventListener('click', () => running ? stop() : start());
+document.getElementById('stepBtn').addEventListener('click', () => { stop(); step(); });
+document.getElementById('randomBtn').addEventListener('click', randomize);
+document.getElementById('clearBtn').addEventListener('click', clearGrid);
+
+speedInput.addEventListener('input', () => {
+  if (running) {
+    stop();
+    start();
+  }
+});
+
+cellSizeInput.addEventListener('input', resizeCanvas);
+
+const PATTERNS = {
+  glider: {
+    cells: [[0,1],[1,2],[2,0],[2,1],[2,2]]
+  },
+  lwss: {
+    cells: [[0,1],[0,4],[1,0],[2,0],[2,4],[3,0],[3,1],[3,2],[3,3]]
+  },
+  pulsar: {
+    cells: [
+      [0,2],[0,3],[0,4],[0,8],[0,9],[0,10],
+      [2,0],[2,5],[2,7],[2,12],
+      [3,0],[3,5],[3,7],[3,12],
+      [4,0],[4,5],[4,7],[4,12],
+      [5,2],[5,3],[5,4],[5,8],[5,9],[5,10],
+      [7,2],[7,3],[7,4],[7,8],[7,9],[7,10],
+      [8,0],[8,5],[8,7],[8,12],
+      [9,0],[9,5],[9,7],[9,12],
+      [10,0],[10,5],[10,7],[10,12],
+      [12,2],[12,3],[12,4],[12,8],[12,9],[12,10]
+    ]
+  },
+  gosper: {
+    cells: [[0,24],[1,22],[1,24],[2,12],[2,13],[2,20],[2,21],[2,34],[2,35],
+            [3,11],[3,15],[3,20],[3,21],[3,34],[3,35],[4,0],[4,1],[4,10],[4,16],
+            [4,20],[4,21],[5,0],[5,1],[5,10],[5,14],[5,16],[5,17],[5,22],[5,24],
+            [6,10],[6,16],[6,24],[7,11],[7,15],[8,12],[8,13]]
+  },
+  rpentomino: {
+    cells: [[0,1],[0,2],[1,0],[1,1],[2,1]]
+  },
+  acorn: {
+    cells: [[0,1],[1,3],[2,0],[2,1],[2,4],[2,5],[2,6]]
+  }
+};
+
+document.querySelectorAll('.patterns button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    stop();
+    const pat = PATTERNS[btn.dataset.pattern];
+    const maxR = Math.max(...pat.cells.map(p => p[0]));
+    const maxC = Math.max(...pat.cells.map(p => p[1]));
+    const offR = Math.floor((rows - maxR - 1) / 2);
+    const offC = Math.floor((cols - maxC - 1) / 2);
+    grid = makeGrid();
+    generation = 0;
+    generationEl.textContent = 0;
+    for (const [r, c] of pat.cells) {
+      grid[r + offR][c + offC] = 1;
+    }
+    updatePopulation();
+    draw();
+  });
+});
+
+window.addEventListener('resize', resizeCanvas);
+
+resizeCanvas();
+randomize();
+</script>
+</body>
+</html>
